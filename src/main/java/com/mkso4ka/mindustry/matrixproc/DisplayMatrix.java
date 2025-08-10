@@ -14,12 +14,27 @@ class DisplayMatrix {
         int startOffset = border;
         int count = 0;
 
-        for (int i = 0; i < y; i++) {
-            for (int j = 0; j < x; j++) {
-                int topLeftX = startOffset + i * displaySize;
-                int topLeftY = startOffset + j * displaySize;
+        // =================================================================
+        // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ 1: Порядок итерации
+        // Теперь итерация идет сначала по колонкам (j), потом по рядам (i),
+        // чтобы соответствовать порядку в Main.java.
+        // =================================================================
+        for (int j = 0; j < x; j++) { // Внешний цикл по X (колонки)
+            for (int i = 0; i < y; i++) { // Внутренний цикл по Y (ряды)
+                
+                // Расчет X-координаты центра (остается без изменений)
+                int topLeftX = startOffset + j * displaySize;
                 centers[count][0] = topLeftX + displaySize / 2;
-                centers[count][1] = topLeftY + displaySize / 2;
+
+                // =================================================================
+                // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ 2: Инверсия оси Y
+                // Мы рассчитываем Y-координату как в Java (от верхнего края),
+                // а затем "переворачиваем" ее для системы координат Mindustry.
+                // =================================================================
+                int topLeftY_java = startOffset + i * displaySize;
+                int centerY_java = topLeftY_java + displaySize / 2;
+                centers[count][1] = (n - 1) - centerY_java; // (n-1) - это последняя Y-координата в матрице
+
                 count++;
             }
         }

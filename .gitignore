@@ -24,3 +24,4 @@ output_images/
 *.jar
 *.war
 *.ear
+/outputProcessors/
