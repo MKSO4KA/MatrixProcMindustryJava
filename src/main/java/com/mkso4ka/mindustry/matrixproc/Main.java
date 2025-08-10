@@ -1,5 +1,7 @@
 package com.mkso4ka.mindustry.matrixproc;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -18,8 +20,8 @@ public class Main {
     public static void main(String[] args) {
         try {
             // --- Входные параметры ---
-            int displaysX = 2;
-            int displaysY = 2;
+            int displaysX = 1;
+            int displaysY = 1;
             int displaySize = 3;
             File sourceImageFile = new File("/storage/emulated/0/1АA/python.png");
 
@@ -34,12 +36,13 @@ public class Main {
             int displayPixelSize = getDisplayPixelSize(displaySize);
             System.out.println("2. Параметры: Видимая область=" + displayPixelSize + "px, Внутренняя рамка=" + BORDER_SIZE + "px.");
 
-            // 3. Рассчитываем итоговый размер мастер-изображения, компенсируя ТОЛЬКО внутренние рамки
+            // 3. Рассчитываем итоговый размер и создаем мастер-изображение
             int totalWidth = (displaysX * displayPixelSize) + (Math.max(0, displaysX - 1) * BORDER_SIZE * 2);
             int totalHeight = (displaysY * displayPixelSize) + (Math.max(0, displaysY - 1) * BORDER_SIZE * 2);
             System.out.println("3. Масштабирование исходного изображения до " + totalWidth + "x" + totalHeight + ".");
             BufferedImage masterImage = ImageIO.read(sourceImageFile);
             BufferedImage scaledMasterImage = ImageUtils.resize(masterImage, totalWidth, totalHeight);
+            ImageIO.write(scaledMasterImage, "png", new File(outputDir, "scaled_master_image.png")); // ДЕБАГ 1
 
             // 4. Создаем чертеж
             DisplayMatrix displayMatrix = new DisplayMatrix();
@@ -49,47 +52,45 @@ public class Main {
             System.out.println("4. Создан чертеж для " + blueprint.displayCoordinates.length + " дисплеев.");
 
             // 5. Анализируем фрагменты
-            System.out.println("5. Анализ фрагментов...");
+            System.out.println("5. Анализ и нарезка фрагментов...");
             int[] processorsPerDisplay = new int[blueprint.displayCoordinates.length];
             
-            int currentY = 0;
-            for (int i = 0; i < displaysY; i++) { // Внешний цикл по рядам (Y)
-                int currentX = 0;
-                int rowHeight = 0; // Высота текущего ряда фрагментов
-                for (int j = 0; j < displaysX; j++) { // Внутренний цикл по колонкам (X)
+            for (int i = 0; i < displaysY; i++) {
+                for (int j = 0; j < displaysX; j++) {
                     int displayIndex = j * displaysY + i;
 
-                    // 5.1. Определяем, является ли дисплей крайним
-                    boolean isFirstCol = (j == 0);
-                    boolean isLastCol = (j == displaysX - 1);
-                    boolean isFirstRow = (i == 0);
-                    boolean isLastRow = (i == displaysY - 1);
+                    // 5.1. Рассчитываем размер и смещение для вырезания
+                    int sliceWidth = displayPixelSize + (j > 0 ? BORDER_SIZE : 0) + (j < displaysX - 1 ? BORDER_SIZE : 0);
+                    int sliceHeight = displayPixelSize + (i > 0 ? BORDER_SIZE : 0) + (i < displaysY - 1 ? BORDER_SIZE : 0);
+                    int subX = j * (displayPixelSize + BORDER_SIZE * 2) - (j > 0 ? BORDER_SIZE : 0);
+                    int subY = i * (displayPixelSize + BORDER_SIZE * 2) - (i > 0 ? BORDER_SIZE : 0);
 
-                    // 5.2. Рассчитываем размер фрагмента для вырезания
-                    int sliceWidth = displayPixelSize + (isFirstCol ? 0 : BORDER_SIZE) + (isLastCol ? 0 : BORDER_SIZE);
-                    int sliceHeight = displayPixelSize + (isFirstRow ? 0 : BORDER_SIZE) + (isLastRow ? 0 : BORDER_SIZE);
-                    rowHeight = sliceHeight; // Все фрагменты в одном ряду имеют одинаковую высоту
+                    // 5.2. Вырезаем фрагмент
+                    BufferedImage finalSlice = scaledMasterImage.getSubimage(subX, subY, sliceWidth, sliceHeight);
+                    ImageIO.write(finalSlice, "png", new File(outputDir, "debug_tile_raw_slice_" + displayIndex + ".png")); // ДЕБАГ 2
 
-                    // 5.3. Нарезаем финальный фрагмент, используя накопители currentX и currentY
-                    BufferedImage finalSlice = scaledMasterImage.getSubimage(currentX, currentY, sliceWidth, sliceHeight);
-                    currentX += sliceWidth; // Сдвигаем X для следующего фрагмента в ряду
-
-                    // ОТЛАДКА
-                    File debugFile = new File(outputDir.getPath() + "/debug_tile_final_" + displayIndex + ".png");
-                    ImageIO.write(finalSlice, "png", debugFile);
-
-                    // 5.4. Анализируем
+                    // 5.3. Анализируем фрагмент
                     Pixmap pixmap = Pixmap.fromBufferedImage(finalSlice);
                     ImageProcessor processor = new ImageProcessor(pixmap);
                     Map<Integer, List<Rect>> rects = processor.groupOptimal();
 
-                    // 5.5. Генерируем команды и считаем процессоры
-                    List<String> allCommands = generateCommandList(rects, finalSlice.getHeight());
+                    // --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Определяем смещение для коррекции координат ---
+                    int offsetX = (j > 0) ? BORDER_SIZE : 0;
+                    int offsetY = (i > 0) ? BORDER_SIZE : 0;
+
+                    // 5.4. Генерируем команды и считаем процессоры
+                    List<String> allCommands = generateCommandList(rects, displayPixelSize, offsetX, offsetY);
                     int commandCount = allCommands.size();
                     processorsPerDisplay[displayIndex] = (int) Math.ceil((double) commandCount / COMMANDS_PER_PROCESSOR);
-                    System.out.println("   Дисплей " + displayIndex + " (X:" + j + ",Y:" + i + "): " + commandCount + " команд -> " + processorsPerDisplay[displayIndex] + " процессоров.");
+                    System.out.println("   Дисплей " + displayIndex + " (X:" + j + ",Y:" + i + "): "
+                        + "Срез " + sliceWidth + "x" + sliceHeight + ". "
+                        + "Смещение (" + offsetX + "," + offsetY + "). "
+                        + commandCount + " команд -> " + processorsPerDisplay[displayIndex] + " проц.");
 
-                    // 5.6. Сохраняем код
+                    // --- Секция расширенного дебага ---
+                    createDebugImages(outputDir, displayIndex, finalSlice, rects, displayPixelSize, offsetX, offsetY);
+
+                    // 5.5. Сохраняем код для процессоров
                     for (int p = 0; p < processorsPerDisplay[displayIndex]; p++) {
                         int start = p * COMMANDS_PER_PROCESSOR;
                         int end = Math.min(start + COMMANDS_PER_PROCESSOR, commandCount);
@@ -101,7 +102,6 @@ public class Main {
                         Files.write(Paths.get(processorCodeDir.getPath(), fileName), codeBuilder.toString().getBytes());
                     }
                 }
-                currentY += rowHeight; // Сдвигаем Y для следующего ряда
             }
 
             System.out.println("--- ИТОГ АНАЛИЗА ---");
@@ -124,6 +124,66 @@ public class Main {
         }
     }
 
+    /**
+     * Создает два отладочных изображения для одного фрагмента.
+     */
+    private static void createDebugImages(File outputDir, int displayIndex, BufferedImage finalSlice, Map<Integer, List<Rect>> rects, int displayPixelSize, int offsetX, int offsetY) throws IOException {
+        // ДЕБАГ 3: Рисуем найденные прямоугольники на "сыром" фрагменте
+        BufferedImage sliceWithRects = new BufferedImage(finalSlice.getWidth(), finalSlice.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g1 = sliceWithRects.createGraphics();
+        g1.drawImage(finalSlice, 0, 0, null);
+        for (List<Rect> rectList : rects.values()) {
+            for (Rect rect : rectList) {
+                g1.setColor(Color.RED);
+                g1.drawRect(rect.x, rect.y, rect.w - 1, rect.h - 1);
+            }
+        }
+        g1.dispose();
+        ImageIO.write(sliceWithRects, "png", new File(outputDir, "debug_tile_with_rects_" + displayIndex + ".png"));
+
+        // ДЕБАГ 4: Симулируем отрисовку на дисплее с исправленными координатами
+        BufferedImage commandPreview = new BufferedImage(displayPixelSize, displayPixelSize, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = commandPreview.createGraphics();
+        g2.setColor(Color.BLACK); // Фон для наглядности
+        g2.fillRect(0, 0, displayPixelSize, displayPixelSize);
+        for (Map.Entry<Integer, List<Rect>> entry : rects.entrySet()) {
+            g2.setColor(new Color(entry.getKey(), true));
+            for (Rect rect : entry.getValue()) {
+                int correctedX = rect.x - offsetX;
+                int correctedY = rect.y - offsetY;
+                // Проверка, чтобы не рисовать за пределами видимой области
+                if (correctedX >= 0 && correctedY >= 0 && correctedX + rect.w <= displayPixelSize && correctedY + rect.h <= displayPixelSize) {
+                    g2.fillRect(correctedX, correctedY, rect.w, rect.h);
+                }
+            }
+        }
+        g2.dispose();
+        ImageIO.write(commandPreview, "png", new File(outputDir, "debug_final_commands_preview_" + displayIndex + ".png"));
+    }
+
+    private static List<String> generateCommandList(Map<Integer, List<Rect>> rects, int displayPixelSize, int offsetX, int offsetY) {
+        List<String> commands = new ArrayList<>();
+        for (Map.Entry<Integer, List<Rect>> entry : rects.entrySet()) {
+            List<Rect> rectList = entry.getValue();
+            if (!rectList.isEmpty()) {
+                commands.add(formatColorCommand(entry.getKey()));
+                for (Rect rect : rectList) {
+                    int correctedX = rect.x - offsetX;
+                    int correctedY = rect.y - offsetY;
+                    // Инвертируем Y для Mindustry, используя correctedY и размер видимой области
+                    int mindustryY = displayPixelSize - correctedY - rect.h;
+                    commands.add(formatRectCommand(correctedX, mindustryY, rect.w, rect.h));
+                }
+            }
+        }
+        return commands;
+    }
+
+    private static String formatRectCommand(int x, int y, int w, int h) {
+        return String.format("draw rect %d %d %d %d 0 0", x, y, w, h);
+    }
+    
+    // Остальные вспомогательные методы без изменений
     private static void cleanAndCreateDirectory(File directory) {
         if (directory.exists()) {
             File[] files = directory.listFiles();
@@ -147,30 +207,11 @@ public class Main {
         }
     }
 
-    private static List<String> generateCommandList(Map<Integer, List<Rect>> rects, int canvasHeight) {
-        List<String> commands = new ArrayList<>();
-        for (Map.Entry<Integer, List<Rect>> entry : rects.entrySet()) {
-            List<Rect> rectList = entry.getValue();
-            if (!rectList.isEmpty()) {
-                commands.add(formatColorCommand(entry.getKey()));
-                for (Rect rect : rectList) {
-                    int mindustryY = canvasHeight - rect.y - rect.h;
-                    commands.add(formatRectCommand(rect, mindustryY));
-                }
-            }
-        }
-        return commands;
-    }
-
     private static String formatColorCommand(int pixel) {
         int a = (pixel >> 24) & 0xff;
         int r = (pixel >> 16) & 0xff;
         int g = (pixel >> 8) & 0xff;
         int b = pixel & 0xff;
         return String.format("draw color %d %d %d %d 0 0", r, g, b, a);
-    }
-
-    private static String formatRectCommand(Rect rect, int mindustryY) {
-        return String.format("draw rect %d %d %d %d 0 0", rect.x, mindustryY, rect.w, rect.h);
     }
 }
